@@ -1,8 +1,12 @@
 name: CI
 
+# `push` fica restrito à main de propósito. Com `branches: ["**"]`, todo push
+# numa branch com PR aberto disparava dois jobs idênticos — um por `push` e
+# outro por `pull_request` — dobrando o consumo de runner. As branches de
+# trabalho já são cobertas pelo gatilho de pull_request.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:
