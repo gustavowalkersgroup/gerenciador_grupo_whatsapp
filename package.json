@@ -13,7 +13,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "seed": "tsx scripts/seed.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test:integration": "tsx --test --test-concurrency=1 tests/integration.test.ts tests/broadcast.test.ts"
   },
   "dependencies": {
