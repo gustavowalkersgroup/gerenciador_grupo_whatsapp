@@ -20,6 +20,8 @@ interface Captured {
 describe("webhook da Evolution", { skip: DB ? false : "defina TEST_DATABASE_URL" }, () => {
   let server: Server;
   let captured: Captured[] = [];
+  /** Caminhos que a Evolution falsa deve recusar, para exercitar o erro. */
+  let failPaths: string[] = [];
   let POST: (req: Request) => Promise<Response>;
   let db: typeof import("../src/lib/db").db;
   let schema: typeof import("../src/lib/db/schema");
@@ -36,10 +38,16 @@ describe("webhook da Evolution", { skip: DB ? false : "defina TEST_DATABASE_URL"
       let raw = "";
       req.on("data", (c) => (raw += c));
       req.on("end", () => {
+        const path = req.url ?? "";
         captured.push({
-          path: req.url ?? "",
+          path,
           body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
         });
+        if (failPaths.some((p) => path.includes(p))) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ message: "indisponível" }));
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ key: { id: "FAKE", remoteJid: "x", fromMe: true } }));
       });
@@ -91,6 +99,7 @@ describe("webhook da Evolution", { skip: DB ? false : "defina TEST_DATABASE_URL"
       await db.delete(t);
     }
     captured = [];
+    failPaths = [];
   }
 
   async function seedInstanceAndGroup() {
@@ -420,6 +429,81 @@ describe("webhook da Evolution", { skip: DB ? false : "defina TEST_DATABASE_URL"
     assert.equal(stat.leaves, 1);
 
     assert.equal(instance.evolutionName, INSTANCE);
+  });
+
+  it("registra a falha de envio sem derrubar o webhook", async () => {
+    await reset();
+    const { instance } = await seedInstanceAndGroup();
+    await db.insert(schema.keywordTriggers).values({
+      instanceId: instance.id,
+      name: "Sapato",
+      keywords: ["sapato"],
+      requiredAll: [],
+      negativeKeywords: [],
+      dmTemplate: "oi",
+    });
+
+    failPaths = ["/message/sendText/"];
+
+    const res = await post(messagePayload("quero sapato", "F-1"));
+    const json = (await res.json()) as { keyword?: { sent?: boolean; reason?: string } };
+
+    assert.equal(res.status, 200, "falha de envio não pode derrubar a rota");
+    assert.equal(json.keyword?.sent, false);
+    assert.equal(json.keyword?.reason, "send_error");
+
+    const [hit] = await db.select().from(schema.keywordHits);
+    assert.equal(hit.status, "failed");
+    assert.equal(hit.reason, "send_error");
+  });
+
+  it("a chave renomeada por erro libera o reenvio do mesmo evento", async () => {
+    await reset();
+    const { instance } = await seedInstanceAndGroup();
+    await db.insert(schema.keywordTriggers).values({
+      instanceId: instance.id,
+      name: "Sapato",
+      keywords: ["sapato"],
+      requiredAll: [],
+      negativeKeywords: [],
+      dmTemplate: "oi",
+    });
+
+    // Primeira entrega processa e mantém a chave reservada.
+    await post(messagePayload("quero sapato", "R-1"));
+    const [evento] = await db.select().from(schema.webhookEvents);
+    const chaveOriginal = evento.dedupeKey;
+
+    // Reenvio idêntico é descartado, como deve ser.
+    const dup = await post(messagePayload("quero sapato", "R-1"));
+    assert.equal((await dup.json() as { deduped?: boolean }).deduped, true);
+    assert.equal(captured.filter((c) => c.body.number === MEMBER_JID).length, 1);
+
+    // É isto que o tratamento de erro faz: renomeia a chave do registro com
+    // falha, devolvendo a original ao pool. Sem isso, um erro passageiro
+    // faria o evento ser descartado para sempre no reenvio.
+    await db
+      .update(schema.webhookEvents)
+      .set({ dedupeKey: `${chaveOriginal}:erro:1` })
+      .where(drizzle.eq(schema.webhookEvents.id, evento.id));
+
+    const reenvio = await post(messagePayload("quero sapato", "R-1"));
+
+    // A chave original voltou a ser aceita: o registro de erro ficou como
+    // histórico e um novo registro foi criado para o reenvio.
+    const eventos = await db.select().from(schema.webhookEvents);
+    assert.equal(eventos.length, 2, "a chave liberada deveria aceitar o reenvio");
+    assert.ok(eventos.some((e) => e.dedupeKey === chaveOriginal));
+
+    /**
+     * E o DM continua não saindo duas vezes — mas por uma segunda barreira,
+     * não pela primeira: `message_events` tem índice único por (grupo,
+     * mensagem), então a mensagem já processada é reconhecida. As duas camadas
+     * se complementam: a chave liberada permite reprocessar um evento que
+     * falhou, e o índice de mensagem impede repetir o que já deu certo.
+     */
+    assert.equal((await reenvio.json() as { deduped?: boolean }).deduped, true);
+    assert.equal(captured.filter((c) => c.body.number === MEMBER_JID).length, 1);
   });
 
   it("atualiza o status do número quando a conexão cai", async () => {

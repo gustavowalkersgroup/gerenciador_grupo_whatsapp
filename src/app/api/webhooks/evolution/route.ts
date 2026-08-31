@@ -77,15 +77,32 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = (e as Error).message;
     console.error(`[webhook] ${event} falhou:`, msg);
+
+    /**
+     * A chave de dedupe foi reservada antes de processar. Se ela ficasse como
+     * está, o reenvio da Evolution seria descartado como duplicata e o evento
+     * se perderia para sempre — justamente no caso em que a falha foi passageira
+     * (banco indisponível, timeout da Evolution).
+     *
+     * Renomeamos a chave para uma variante de erro: o registro fica como
+     * histórico e a chave original volta a ficar livre para o reenvio.
+     */
     await db
       .update(webhookEvents)
-      // O payload só é guardado quando dá erro, e some junto com o registro
-      // na retenção de 7 dias. Guardar sempre significaria manter o texto de
-      // toda mensagem de grupo — exatamente o que a retenção evita.
-      .set({ processedAt: new Date(), error: msg, payload: envelope.data ?? null })
+      .set({
+        dedupeKey: `${key}:erro:${Date.now()}`,
+        processedAt: new Date(),
+        error: msg,
+        // O payload só é guardado quando dá erro, e some junto com o registro na
+        // retenção de 7 dias. Guardar sempre significaria manter o texto de toda
+        // mensagem de grupo — exatamente o que a retenção evita.
+        payload: envelope.data ?? null,
+      })
       .where(eq(webhookEvents.id, eventRowId));
-    // 200 de propósito: a Evolution reenviaria em loop e o erro já está registrado.
-    return NextResponse.json({ ok: false, error: msg });
+
+    // 500 para a Evolution reenviar. Como a chave foi liberada, o reenvio é
+    // processado de verdade em vez de cair no dedupe.
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
 
