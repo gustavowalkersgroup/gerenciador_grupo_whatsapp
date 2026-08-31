@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...menos os exemplos: o README manda copiá-los, então precisam existir no repo
+!.env.example
+!infra/.env.example
 
 # vercel
 .vercel
