@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Nav } from "@/components/nav";
 import { requireUser } from "@/lib/auth/guard";
 import { signOut } from "@/app/entrar/actions";
 
@@ -26,17 +26,7 @@ export default async function PainelLayout({ children }: LayoutProps<"/">) {
           <span className="text-sm font-semibold">Gerenciador</span>
         </div>
 
-        <nav className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-col lg:overflow-visible">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="whitespace-nowrap rounded-lg px-3 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-text"
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+        <Nav items={NAV} />
 
         <div className="hidden border-t border-border px-5 py-4 lg:block">
           <p className="truncate text-xs text-muted">{user.name ?? user.email}</p>
