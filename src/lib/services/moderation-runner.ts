@@ -1,7 +1,12 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { groupMembers, moderationEvents, moderationRules } from "@/lib/db/schema";
-import { evaluate, type MessageContext, type Rule } from "@/lib/domain/moderation";
+import {
+  evaluate,
+  type MessageContext,
+  type ModerationAction,
+  type Rule,
+} from "@/lib/domain/moderation";
 import { excerpt, renderTemplate } from "@/lib/domain/text";
 import { evolution } from "@/lib/evolution/client";
 import type { MessageKey } from "@/lib/evolution/types";
@@ -58,6 +63,8 @@ export interface ModerationOutcome {
   kind?: string;
   action?: string;
   removed?: boolean;
+  /** Verdadeiro quando a ação foi rebaixada para aviso por falta de admin. */
+  downgraded?: boolean;
 }
 
 /**
@@ -90,15 +97,17 @@ export async function runModeration(input: ModerationInput): Promise<ModerationO
   const [violation] = evaluate(rules, ctx);
   if (!violation) return { applied: false };
 
-  // Sem ser admin do grupo não dá pra apagar mensagem nem remover ninguém.
-  if (!input.group.botIsAdmin && violation.action !== "warn") {
-    await logEvent(input, violation.ruleId, violation.kind, "warn", 0);
-    return { applied: false };
-  }
+  /**
+   * Sem ser admin do grupo, apagar mensagem e remover membro simplesmente
+   * falham na Evolution. Em vez de gastar a chamada e não fazer nada,
+   * rebaixamos a ação para aviso — que é o que o número consegue fazer.
+   */
+  const canEnforce = input.group.botIsAdmin;
+  const action: ModerationAction = canEnforce ? violation.action : "warn";
 
-  const wantsDelete = violation.action === "delete" || violation.action === "delete_and_warn";
-  const wantsWarn = violation.action === "warn" || violation.action === "delete_and_warn";
-  const wantsRemove = violation.action === "remove";
+  const wantsDelete = canEnforce && (action === "delete" || action === "delete_and_warn");
+  const wantsWarn = action === "warn" || action === "delete_and_warn";
+  const wantsRemove = canEnforce && action === "remove";
 
   let strikes = input.member.strikes;
   if (wantsWarn || wantsRemove) {
@@ -122,7 +131,7 @@ export async function runModeration(input: ModerationInput): Promise<ModerationO
   }
 
   const limit = violation.removeAtStrikes;
-  const shouldRemove = wantsRemove || (limit > 0 && strikes >= limit);
+  const shouldRemove = canEnforce && (wantsRemove || (limit > 0 && strikes >= limit));
 
   if (wantsWarn && !shouldRemove) {
     const text = renderTemplate(violation.warnTemplate ?? "", {
@@ -154,20 +163,17 @@ export async function runModeration(input: ModerationInput): Promise<ModerationO
     );
   }
 
-  await logEvent(
-    input,
-    violation.ruleId,
-    violation.kind,
-    shouldRemove ? "remove" : violation.action,
-    strikes,
-  );
+  const finalAction = shouldRemove ? "remove" : action;
+  await logEvent(input, violation.ruleId, violation.kind, finalAction, strikes);
   await bumpDailyStat(input.group.id, "moderations");
 
   return {
     applied: true,
     kind: violation.kind,
-    action: shouldRemove ? "remove" : violation.action,
+    action: finalAction,
     removed: shouldRemove,
+    /** O painel usa isto pra dizer ao operador por que a punição não saiu. */
+    downgraded: !canEnforce && violation.action !== "warn",
   };
 }
 
@@ -175,7 +181,7 @@ async function logEvent(
   input: ModerationInput,
   ruleId: string,
   kind: Rule["kind"],
-  action: string,
+  action: ModerationAction,
   strikes: number,
 ) {
   await db.insert(moderationEvents).values({
@@ -183,7 +189,7 @@ async function logEvent(
     contactId: input.contact.id,
     ruleId,
     kind,
-    action: action as never,
+    action,
     messageId: input.key.id,
     excerpt: excerpt(input.rawText, 120),
     strikesAfter: strikes,

@@ -1,6 +1,8 @@
 import { and, count, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dailyGroupStats, messageEvents } from "@/lib/db/schema";
+import { localDay } from "@/lib/domain/day";
+import { env } from "@/lib/env";
 
 /**
  * Registra a mensagem. Devolve false quando é reentrega do mesmo evento —
@@ -59,7 +61,7 @@ export async function bumpDailyStat(
   by = 1,
   day = new Date(),
 ): Promise<void> {
-  const iso = day.toISOString().slice(0, 10);
+  const iso = localDay(day, env().TZ_DEFAULT);
   const column = dailyGroupStats[field];
 
   await db
@@ -73,14 +75,14 @@ export async function bumpDailyStat(
 
 /** Recalcula membros ativos do dia a partir dos eventos de mensagem. */
 export async function refreshActiveMembers(groupId: string, day = new Date()): Promise<void> {
-  const iso = day.toISOString().slice(0, 10);
+  const iso = localDay(day, env().TZ_DEFAULT);
+  const tz = env().TZ_DEFAULT;
   await db.execute(sql`
     insert into daily_group_stats (group_id, day, active_members)
     select ${groupId}::uuid, ${iso}::date, count(distinct contact_id)
       from message_events
      where group_id = ${groupId}::uuid
-       and created_at >= ${iso}::date
-       and created_at < (${iso}::date + interval '1 day')
+       and (created_at at time zone ${tz})::date = ${iso}::date
     on conflict (group_id, day)
     do update set active_members = excluded.active_members
   `);

@@ -302,6 +302,55 @@ describe("webhook da Evolution", { skip: DB ? false : "defina TEST_DATABASE_URL"
     assert.equal(deletions.length, 3, "as três mensagens com link deveriam ter sido apagadas");
   });
 
+  it("sem ser admin, avisa em vez de tentar apagar e remover", async () => {
+    await reset();
+    const [instance] = await db
+      .insert(schema.instances)
+      .values({ evolutionName: INSTANCE, label: "Loja", status: "connected" })
+      .returning();
+    // Mesmo grupo, mas o número NÃO é admin.
+    await db.insert(schema.groups).values({
+      instanceId: instance.id,
+      jid: GROUP_JID,
+      name: "Ofertas",
+      managed: true,
+      botIsAdmin: false,
+    });
+    await db.insert(schema.moderationRules).values({
+      instanceId: instance.id,
+      kind: "anti_link",
+      action: "remove",
+      removeAtStrikes: 1,
+      config: {},
+    });
+
+    const res = await post(messagePayload("spam.xyz/oferta", "NA-1"));
+    const json = (await res.json()) as {
+      moderated?: { removed?: boolean; action?: string; downgraded?: boolean };
+    };
+
+    assert.equal(json.moderated?.removed, false, "não pode remover sem ser admin");
+    assert.equal(json.moderated?.action, "warn");
+    assert.equal(json.moderated?.downgraded, true);
+
+    assert.equal(
+      captured.filter((c) => c.path.includes("/group/updateParticipant/")).length,
+      0,
+      "não deveria ter tentado remover",
+    );
+    assert.equal(
+      captured.filter((c) => c.path.includes("/chat/deleteMessageForEveryone/")).length,
+      0,
+      "não deveria ter tentado apagar",
+    );
+
+    // Mas o aviso, que o número consegue mandar, precisa sair.
+    const aviso = captured.find(
+      (c) => c.path.includes("/message/sendText/") && c.body.number === GROUP_JID,
+    );
+    assert.ok(aviso, "o aviso no grupo não saiu");
+  });
+
   it("não age em grupo que não está sob gerenciamento", async () => {
     await reset();
     const [instance] = await db
