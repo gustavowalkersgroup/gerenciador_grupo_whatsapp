@@ -79,7 +79,10 @@ export async function POST(req: Request) {
     console.error(`[webhook] ${event} falhou:`, msg);
     await db
       .update(webhookEvents)
-      .set({ processedAt: new Date(), error: msg })
+      // O payload só é guardado quando dá erro, e some junto com o registro
+      // na retenção de 7 dias. Guardar sempre significaria manter o texto de
+      // toda mensagem de grupo — exatamente o que a retenção evita.
+      .set({ processedAt: new Date(), error: msg, payload: envelope.data ?? null })
       .where(eq(webhookEvents.id, eventRowId));
     // 200 de propósito: a Evolution reenviaria em loop e o erro já está registrado.
     return NextResponse.json({ ok: false, error: msg });
