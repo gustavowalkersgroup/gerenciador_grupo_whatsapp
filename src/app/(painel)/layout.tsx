@@ -16,6 +16,14 @@ const NAV = [
 export default async function PainelLayout({ children }: LayoutProps<"/">) {
   const user = await requireUser();
 
+  const sair = (
+    <form action={signOut}>
+      <button type="submit" className="text-xs text-muted underline hover:text-danger">
+        Sair
+      </button>
+    </form>
+  );
+
   return (
     <div className="flex min-h-screen flex-col lg:flex-row">
       <aside className="border-b border-border bg-surface lg:w-60 lg:shrink-0 lg:border-b-0 lg:border-r">
@@ -24,17 +32,20 @@ export default async function PainelLayout({ children }: LayoutProps<"/">) {
             G
           </span>
           <span className="text-sm font-semibold">Gerenciador</span>
+
+          {/* No mobile a barra lateral vira cabeçalho, e o rodapé com o
+              usuário fica escondido — então sair precisa estar aqui. */}
+          <div className="ml-auto flex items-center gap-3 lg:hidden">
+            <span className="max-w-32 truncate text-xs text-muted">{user.name ?? user.email}</span>
+            {sair}
+          </div>
         </div>
 
         <Nav items={NAV} />
 
         <div className="hidden border-t border-border px-5 py-4 lg:block">
           <p className="truncate text-xs text-muted">{user.name ?? user.email}</p>
-          <form action={signOut}>
-            <button type="submit" className="mt-2 text-xs text-muted underline hover:text-danger">
-              Sair
-            </button>
-          </form>
+          <div className="mt-2">{sair}</div>
         </div>
       </aside>
 
