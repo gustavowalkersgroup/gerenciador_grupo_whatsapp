@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* Paleta escura com o verde do WhatsApp como acento — o painel é operado
+   o dia todo, e fundo claro cansa mais em tela cheia de tabela. */
+:root {
+  --bg: #0b0f14;
+  --surface: #121820;
+  --surface-2: #182029;
+  --border: #24303c;
+  --text: #e7edf3;
+  --muted: #93a1b0;
+  --accent: #25d366;
+  --accent-ink: #04150a;
+  --danger: #f2555a;
+  --warn: #f0b429;
+  --info: #4aa8ff;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-info: var(--info);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+/* Scrollbar discreta pra não brigar com as tabelas longas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}

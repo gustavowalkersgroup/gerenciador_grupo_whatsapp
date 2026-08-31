@@ -1,0 +1,112 @@
+# Evolution API + Postgres + Redis + Caddy (TLS automático).
+#
+# Este é o pedaço que NÃO roda na Vercel: a conexão com o WhatsApp é um
+# websocket que precisa ficar de pé 24/7, e função serverless morre em
+# segundos. O painel na Vercel fala com este serviço por HTTPS.
+#
+#   docker compose up -d
+#
+services:
+  evolution:
+    image: atendai/evolution-api:v2.2.3
+    container_name: evolution
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SERVER_URL: ${EVOLUTION_PUBLIC_URL}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${POSTGRES_PASSWORD}@postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      # A sessão do WhatsApp vive aqui. Perder isto = ler o QR de novo.
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      # O histórico de mensagens fica no NOSSO banco, não no da Evolution.
+      # Guardar tudo aqui infla o disco do VPS sem nenhum ganho.
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      # O webhook é configurado por instância pelo painel, com o segredo no
+      # header. Global desligado evita mandar evento pro lugar errado.
+      WEBHOOK_GLOBAL_ENABLED: "false"
+
+      CONFIG_SESSION_PHONE_CLIENT: ${SESSION_CLIENT_NAME:-Gerenciador}
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "30"
+      DEL_INSTANCE: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-ERROR,WARN}
+      LOG_BAILEYS: error
+      TELEMETRY: "false"
+    volumes:
+      - evolution_instances:/evolution/instances
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: evolution-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: evolution-redis
+    restart: always
+    command: redis-server --save 60 1 --appendonly no
+    volumes:
+      - redis_data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: evolution-caddy
+    restart: always
+    depends_on:
+      - evolution
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      EVOLUTION_DOMAIN: ${EVOLUTION_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  evolution_instances:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

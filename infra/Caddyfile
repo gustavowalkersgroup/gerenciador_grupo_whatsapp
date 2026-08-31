@@ -1,0 +1,22 @@
+# TLS automático via Let's Encrypt. A Evolution precisa ser alcançável por
+# HTTPS porque é ela quem chama o webhook na Vercel, e a Vercel só aceita
+# origem com certificado válido.
+{$EVOLUTION_DOMAIN} {
+	encode gzip
+
+	reverse_proxy evolution:8080 {
+		header_up X-Real-IP {remote_host}
+		# Ler QR e sincronizar 300 grupos passa fácil do timeout padrão.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+	}
+}
