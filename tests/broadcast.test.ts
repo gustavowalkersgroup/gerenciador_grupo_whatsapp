@@ -253,4 +253,85 @@ describe("disparo em lotes", { skip: DB ? false : "defina TEST_DATABASE_URL" }, 
     assert.equal(report.failed, 1);
     assert.equal(sends.length, 0, "não deveria ter chamado a Evolution");
   });
+  it("dois disparadores simultâneos não enviam a mesma mensagem duas vezes", async () => {
+    // Este é o cenário real: o cron da Vercel e o cron do VPS chamando o
+    // mesmo endpoint no mesmo minuto. Sem reserva atômica, cada grupo recebe
+    // a campanha duas vezes — e o cliente vê spam do próprio fornecedor.
+    const { instance, groups } = await seed(6);
+    await mod.createBroadcast({
+      instanceId: instance.id,
+      name: "Corrida",
+      payload: { type: "text", text: "oi" },
+      groupIds: groups.map((g) => g.id),
+      scheduledAt: null,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    });
+
+    const deadline = Date.now() + 20_000;
+    const [a, b] = await Promise.all([
+      mod.dispatchDue({ deadlineMs: deadline }),
+      mod.dispatchDue({ deadlineMs: deadline }),
+    ]);
+
+    assert.equal(a.sent + b.sent, 6, `enviou ${a.sent + b.sent}, esperado 6`);
+    assert.equal(sends.length, 6, "algum grupo recebeu a mensagem mais de uma vez");
+
+    const destinos = sends.map((s) => s.number).sort();
+    assert.equal(new Set(destinos).size, 6, "houve destino duplicado");
+  });
+
+  it("destrava alvo reservado por execução que morreu no meio", async () => {
+    const { instance, groups } = await seed(1);
+    await mod.createBroadcast({
+      instanceId: instance.id,
+      name: "Órfã",
+      payload: { type: "text", text: "oi" },
+      groupIds: [groups[0].id],
+      scheduledAt: null,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    });
+
+    // Simula a função morta: alvo reservado há 10 minutos e nunca concluído.
+    await db
+      .update(schema.broadcastTargets)
+      .set({ status: "sending", claimedAt: new Date(Date.now() - 10 * 60 * 1000) });
+
+    const report = await mod.dispatchDue({ deadlineMs: Date.now() + 20_000 });
+    assert.equal(report.released, 1, "o alvo órfão deveria ter sido destravado");
+    assert.equal(report.sent, 1);
+  });
+
+  it("não fecha a campanha enquanto outro disparador ainda segura alvos", async () => {
+    const { instance, groups } = await seed(2);
+    const { broadcast } = await mod.createBroadcast({
+      instanceId: instance.id,
+      name: "Meio do caminho",
+      payload: { type: "text", text: "oi" },
+      groupIds: groups.map((g) => g.id),
+      scheduledAt: null,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    });
+
+    // Um alvo já foi, o outro está reservado por outra execução agora mesmo.
+    const alvos = await db.select().from(schema.broadcastTargets);
+    await db
+      .update(schema.broadcastTargets)
+      .set({ status: "sent", sentAt: new Date() })
+      .where(drizzle.eq(schema.broadcastTargets.id, alvos[0].id));
+    await db
+      .update(schema.broadcastTargets)
+      .set({ status: "sending", claimedAt: new Date() })
+      .where(drizzle.eq(schema.broadcastTargets.id, alvos[1].id));
+
+    await mod.dispatchDue({ deadlineMs: Date.now() + 10_000 });
+
+    const [b] = await db
+      .select()
+      .from(schema.broadcasts)
+      .where(drizzle.eq(schema.broadcasts.id, broadcast.id));
+    assert.equal(b.status, "running", "fechou a campanha com trabalho em andamento");
+  });
 });

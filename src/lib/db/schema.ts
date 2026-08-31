@@ -54,6 +54,8 @@ export const broadcastStatus = pgEnum("broadcast_status", [
 
 export const targetStatus = pgEnum("target_status", [
   "pending",
+  /** Reservado por uma execução do cron; ninguém mais pode pegar. */
+  "sending",
   "sent",
   "failed",
   "skipped",
@@ -428,11 +430,14 @@ export const broadcastTargets = pgTable(
     messageId: text("message_id"),
     error: text("error"),
     attempts: integer("attempts").notNull().default(0),
+    /** Quando foi reservado — usado para destravar alvo órfão de função morta. */
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("broadcast_targets_uq").on(t.broadcastId, t.groupId),
     index("broadcast_targets_pending_idx").on(t.broadcastId, t.status),
+    index("broadcast_targets_claimed_idx").on(t.status, t.claimedAt),
   ],
 );
 

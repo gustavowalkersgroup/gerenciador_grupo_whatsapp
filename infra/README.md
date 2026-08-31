@@ -61,22 +61,32 @@ Depois, em **Números → cadastrar**, o painel cria a instância na Evolution j
 apontando o webhook para `APP_URL/api/webhooks/evolution` com o
 `WEBHOOK_SECRET` no header. Leia o QR pelo celular e pronto.
 
-## Cron do disparo
+## Cron do disparo e da saúde
 
-No plano Hobby da Vercel o cron roda **uma vez por dia**, o que não serve para
-disparo agendado. Como o VPS já está ligado, use o script daqui:
+O `vercel.json` deixa só a manutenção diária, que roda em qualquer plano. Os
+dois crons frequentes ficam no VPS, porque o plano Hobby da Vercel tem
+frequência mínima diária — e o VPS já está ligado de qualquer forma.
 
 ```bash
 cp cron-dispatch.sh /opt/gerenciador/cron-dispatch.sh
 chmod +x /opt/gerenciador/cron-dispatch.sh
 
 crontab -e
-# adicione, com as variáveis do seu ambiente:
-* * * * * APP_URL=https://seu-painel.vercel.app CRON_SECRET=xxx /opt/gerenciador/cron-dispatch.sh >> /var/log/gg-dispatch.log 2>&1
+# fila de disparo, a cada minuto:
+* * * * *   APP_URL=https://seu-painel.vercel.app CRON_SECRET=xxx /opt/gerenciador/cron-dispatch.sh >> /var/log/gg.log 2>&1
+# saúde dos números, a cada 5 minutos:
+*/5 * * * * APP_URL=https://seu-painel.vercel.app CRON_SECRET=xxx /opt/gerenciador/cron-dispatch.sh saude >> /var/log/gg.log 2>&1
 ```
 
-No plano Pro da Vercel o `vercel.json` já cuida disso e o cron do VPS vira
-redundância — pode manter os dois, o endpoint é idempotente.
+O cron de saúde pergunta à Evolution o estado de cada número e grava no banco.
+Sem ele, o painel só sabe que um número caiu quando chega um evento avisando —
+e se o VPS inteiro morre, esse evento nunca chega: o painel mostraria
+"conectado" indefinidamente enquanto ninguém recebe nada.
+
+No plano Pro você pode mover o disparo para o `vercel.json` com
+`{ "path": "/api/cron/dispatch", "schedule": "* * * * *" }`. Rodar os dois ao
+mesmo tempo é seguro — os alvos são reservados atomicamente no banco, então a
+segunda execução pula o que a primeira já pegou.
 
 ## Backup (faça isto)
 

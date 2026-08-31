@@ -37,15 +37,43 @@ test("dedupeKey separa entrada de saída dos mesmos participantes", () => {
   const add = { id: "1@g.us", action: "add", participants: ["55119@s.whatsapp.net"] };
   const rem = { ...add, action: "remove" };
   assert.notEqual(
-    dedupeKey("group-participants.update", "loja", add),
-    dedupeKey("group-participants.update", "loja", rem),
+    dedupeKey("group-participants.update", "loja", add, "2026-08-31T12:00:00Z"),
+    dedupeKey("group-participants.update", "loja", rem, "2026-08-31T12:00:00Z"),
+  );
+});
+
+test("reenvio do mesmo evento de participante gera a mesma chave", () => {
+  const add = { id: "1@g.us", action: "add", participants: ["55119@s.whatsapp.net"] };
+  const t = "2026-08-31T12:00:00Z";
+  assert.equal(
+    dedupeKey("group-participants.update", "loja", add, t),
+    dedupeKey("group-participants.update", "loja", add, t),
+  );
+});
+
+test("quem sai e volta recebe boas-vindas de novo: a chave muda com o horário", () => {
+  // Era um bug silencioso: sem o horário na chave, a segunda entrada da mesma
+  // pessoa no mesmo grupo era descartada como duplicata para sempre.
+  const add = { id: "1@g.us", action: "add", participants: ["55119@s.whatsapp.net"] };
+  assert.notEqual(
+    dedupeKey("group-participants.update", "loja", add, "2026-08-31T12:00:00Z"),
+    dedupeKey("group-participants.update", "loja", add, "2026-08-31T14:30:00Z"),
+  );
+});
+
+test("id de mensagem dispensa o horário — ele já identifica o evento", () => {
+  const data = { key: { id: "MSG9" } };
+  assert.equal(
+    dedupeKey("messages.upsert", "loja", data, "2026-08-31T12:00:00Z"),
+    dedupeKey("messages.upsert", "loja", data, "2026-08-31T18:00:00Z"),
   );
 });
 
 test("dedupeKey cai no hash quando o evento não tem identificador", () => {
-  const k = dedupeKey("connection.update", "loja", { state: "open" });
-  assert.match(k, /^connection\.update:loja:[0-9a-f]{32}$/);
-  assert.notEqual(k, dedupeKey("connection.update", "loja", { state: "close" }));
+  const t = "2026-08-31T12:00:00Z";
+  const k = dedupeKey("connection.update", "loja", { state: "open" }, t);
+  assert.match(k, /^connection\.update:loja:[0-9a-f]{32}:/);
+  assert.notEqual(k, dedupeKey("connection.update", "loja", { state: "close" }, t));
 });
 
 const msg = (message: IncomingMessage["message"]): IncomingMessage => ({

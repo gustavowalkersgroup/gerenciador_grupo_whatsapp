@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { broadcastTargets, broadcasts, groupTags, groups, instances } from "@/lib/db/schema";
 import { renderTemplate } from "@/lib/domain/text";
@@ -102,6 +102,8 @@ export async function promoteScheduled(now = new Date()): Promise<number> {
 }
 
 export interface DispatchReport {
+  /** Alvos destravados de uma execução anterior que morreu no meio. */
+  released: number;
   promoted: number;
   processed: number;
   sent: number;
@@ -117,7 +119,9 @@ export interface DispatchReport {
  */
 export async function dispatchDue(opts: { deadlineMs: number; now?: Date }): Promise<DispatchReport> {
   const now = opts.now ?? new Date();
+  const released = await releaseStaleClaims();
   const report: DispatchReport = {
+    released,
     promoted: await promoteScheduled(now),
     processed: 0,
     sent: 0,
@@ -139,42 +143,87 @@ export async function dispatchDue(opts: { deadlineMs: number; now?: Date }): Pro
       break;
     }
 
-    const targets = await db
-      .select({ t: broadcastTargets, jid: groups.jid, name: groups.name })
-      .from(broadcastTargets)
-      .innerJoin(groups, eq(broadcastTargets.groupId, groups.id))
-      .where(
-        and(eq(broadcastTargets.broadcastId, b.id), eq(broadcastTargets.status, "pending")),
+    /**
+     * Reserva os alvos ANTES de enviar, num único UPDATE atômico.
+     *
+     * Sem isto, duas execuções simultâneas do cron (a da Vercel e a do VPS,
+     * ou duas invocações que se sobrepõem) leem a mesma lista de pendentes e
+     * mandam a mesma mensagem duas vezes para o mesmo grupo. `FOR UPDATE SKIP
+     * LOCKED` faz a segunda execução simplesmente pular o que a primeira já
+     * pegou, em vez de esperar ou duplicar.
+     */
+    const claimed = await db.execute<{
+      id: string;
+      group_id: string;
+      attempts: number;
+      jid: string;
+      name: string;
+    }>(sql`
+      with alvo as (
+        select bt.id
+          from broadcast_targets bt
+         where bt.broadcast_id = ${b.id}::uuid
+           and bt.status = 'pending'
+         order by bt.id
+         limit ${b.batchSize}
+         for update skip locked
       )
-      .orderBy(asc(broadcastTargets.id))
-      .limit(b.batchSize);
+      update broadcast_targets bt
+         set status = 'sending', claimed_at = now()
+        from alvo, groups g
+       where bt.id = alvo.id
+         and g.id = bt.group_id
+      returning bt.id, bt.group_id, bt.attempts, g.jid, g.name
+    `);
+
+    const targets = [...claimed];
 
     if (targets.length === 0) {
-      await db
-        .update(broadcasts)
-        .set({ status: "done", finishedAt: new Date() })
-        .where(eq(broadcasts.id, b.id));
-      report.finished.push(b.name);
+      // Só encerra quando não sobrou nem pendente nem reservado por outra
+      // execução — senão a campanha fecharia no meio do trabalho alheio.
+      const [restante] = await db
+        .select({ n: count() })
+        .from(broadcastTargets)
+        .where(
+          and(
+            eq(broadcastTargets.broadcastId, b.id),
+            inArray(broadcastTargets.status, ["pending", "sending"]),
+          ),
+        );
+
+      if ((restante?.n ?? 0) === 0) {
+        await db
+          .update(broadcasts)
+          .set({ status: "done", finishedAt: new Date() })
+          .where(eq(broadcasts.id, b.id));
+        report.finished.push(b.name);
+      }
       continue;
     }
 
     const payload = b.payload as BroadcastPayload;
 
-    for (const { t, jid, name } of targets) {
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+
+      // Checa ANTES de enviar: passar do prazo no meio de um envio deixaria a
+      // função ser morta pelo runtime com o alvo ainda reservado.
       if (Date.now() >= opts.deadlineMs) {
         report.ranOutOfTime = true;
+        await releaseTargets(targets.slice(i).map((x) => x.id));
         break;
       }
 
       report.processed++;
       try {
-        await sendToGroup(inst.evolutionName, jid, name, payload);
+        await sendToGroup(inst.evolutionName, t.jid, t.name, payload);
         await db
           .update(broadcastTargets)
           .set({
             status: "sent",
             sentAt: new Date(),
-            attempts: sql`${broadcastTargets.attempts} + 1`,
+            attempts: t.attempts + 1,
+            claimedAt: null,
             error: null,
           })
           .where(eq(broadcastTargets.id, t.id));
@@ -184,9 +233,14 @@ export async function dispatchDue(opts: { deadlineMs: number; now?: Date }): Pro
         const attempts = t.attempts + 1;
         await db
           .update(broadcastTargets)
-          // 3 tentativas e desiste — insistir num grupo que o número foi
+          // 3 tentativas e desiste — insistir num grupo de onde o número foi
           // removido só empurra o resto da fila pra trás.
-          .set({ status: attempts >= 3 ? "failed" : "pending", attempts, error: msg })
+          .set({
+            status: attempts >= 3 ? "failed" : "pending",
+            attempts,
+            claimedAt: null,
+            error: msg,
+          })
           .where(eq(broadcastTargets.id, t.id));
         report.failed++;
       }
@@ -196,6 +250,30 @@ export async function dispatchDue(opts: { deadlineMs: number; now?: Date }): Pro
   }
 
   return report;
+}
+
+/** Devolve à fila alvos reservados que não chegaram a ser enviados. */
+async function releaseTargets(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db
+    .update(broadcastTargets)
+    .set({ status: "pending", claimedAt: null })
+    .where(inArray(broadcastTargets.id, ids));
+}
+
+/**
+ * Destrava alvos reservados por uma execução que morreu antes de terminar
+ * (timeout duro, deploy no meio). Sem isto, um alvo ficaria "enviando" para
+ * sempre e a campanha nunca fecharia.
+ */
+export async function releaseStaleClaims(olderThanMs = 5 * 60 * 1000): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMs);
+  const rows = await db
+    .update(broadcastTargets)
+    .set({ status: "pending", claimedAt: null })
+    .where(and(eq(broadcastTargets.status, "sending"), lt(broadcastTargets.claimedAt, cutoff)))
+    .returning({ id: broadcastTargets.id });
+  return rows.length;
 }
 
 async function sendToGroup(

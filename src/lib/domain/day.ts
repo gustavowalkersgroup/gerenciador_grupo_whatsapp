@@ -28,3 +28,11 @@ export function periodDays(days: number, timeZone: string, now = new Date()): st
     localDay(new Date(now.getTime() - (days - 1 - i) * 86_400_000), timeZone),
   );
 }
+
+/**
+ * Instante de N horas atrás. Fica aqui pelo mesmo motivo de `periodDays`:
+ * ler o relógio durante o render de um componente é impuro.
+ */
+export function hoursAgo(hours: number, now = new Date()): Date {
+  return new Date(now.getTime() - hours * 3_600_000);
+}

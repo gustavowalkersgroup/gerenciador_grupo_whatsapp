@@ -55,7 +55,7 @@ export async function POST(req: Request) {
   }
 
   // Idempotência: quem já foi processado sai daqui sem efeito colateral.
-  const key = dedupeKey(event, instanceName, envelope.data);
+  const key = dedupeKey(event, instanceName, envelope.data, envelope.date_time);
   const claimed = await db
     .insert(webhookEvents)
     .values({ dedupeKey: key, event, instanceName, payload: null })
@@ -232,6 +232,16 @@ async function handleParticipants(instance: InstanceRow, data: GroupParticipants
 
   const results: string[] = [];
 
+  /**
+   * Um link de convite divulgado traz dezenas de pessoas em poucos minutos, e
+   * o evento chega com vários participantes de uma vez. Mandar boas-vindas em
+   * loop apertado é o padrão mais fácil de detectar como robô — é a forma mais
+   * rápida de perder o número. Espaçamos os envios e limitamos quantos saem
+   * por evento; quem passar do teto entra registrado, só sem mensagem.
+   */
+  const MAX_BOAS_VINDAS_POR_EVENTO = 8;
+  let enviadas = 0;
+
   for (const raw of data.participants) {
     const jid = normalizeJid(raw);
     const contact = await upsertContact(jid);
@@ -240,7 +250,15 @@ async function handleParticipants(instance: InstanceRow, data: GroupParticipants
       case "add": {
         await upsertMember(group.id, contact.id, { joinedAt: new Date(), leftAt: null });
         await bumpDailyStat(group.id, "joins");
+
+        if (enviadas >= MAX_BOAS_VINDAS_POR_EVENTO) {
+          results.push("entrada registrada (teto de boas-vindas do evento)");
+          break;
+        }
+        if (enviadas > 0) await pausaHumana(instance);
+
         const sent = await sendWelcome({ instance, group, contact });
+        if (sent) enviadas++;
         results.push(sent ? "boas-vindas enviada" : "entrada registrada");
         break;
       }
@@ -262,6 +280,14 @@ async function handleParticipants(instance: InstanceRow, data: GroupParticipants
 
   await refreshCount(instance, group);
   return { participants: results };
+}
+
+/** Intervalo aleatório entre envios, no mesmo range configurado na instância. */
+function pausaHumana(instance: InstanceRow): Promise<void> {
+  const lo = Math.max(0, instance.minSendDelayMs);
+  const hi = Math.max(lo, instance.maxSendDelayMs);
+  const espera = Math.min(lo + Math.floor(Math.random() * (hi - lo + 1)), 8000);
+  return new Promise((r) => setTimeout(r, espera));
 }
 
 /** Mantém o contador de membros e o "sou admin?" em dia sem sync completo. */

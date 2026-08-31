@@ -1,5 +1,5 @@
 {
-  "id": "48bd741a-cc58-4a59-b218-abcb217250c9",
+  "id": "b4187551-ed60-4553-acea-0b29a78dbae5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -141,6 +141,12 @@
           "notNull": true,
           "default": 0
         },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "sent_at": {
           "name": "sent_at",
           "type": "timestamp with time zone",
@@ -181,6 +187,27 @@
             },
             {
               "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "broadcast_targets_claimed_idx": {
+          "name": "broadcast_targets_claimed_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "claimed_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2375,6 +2402,7 @@
       "schema": "public",
       "values": [
         "pending",
+        "sending",
         "sent",
         "failed",
         "skipped"

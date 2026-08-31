@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   contacts,
@@ -10,6 +10,7 @@ import {
   moderationEvents,
 } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth/guard";
+import { hoursAgo } from "@/lib/domain/day";
 import { Alert, Badge, Card, Empty, Stat, Table, Td } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ const STATUS: Record<string, { label: string; tone: "accent" | "warn" | "danger"
 export default async function VisaoGeralPage() {
   await requireUser();
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const since = hoursAgo(24);
 
   const [instanceRows, [groupCount], [managedCount], [dmToday], [modToday], [optOuts], recentHits] =
     await Promise.all([

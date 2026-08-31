@@ -4,7 +4,7 @@ CREATE TYPE "public"."instance_status" AS ENUM('disconnected', 'connecting', 'co
 CREATE TYPE "public"."match_mode" AS ENUM('contains', 'exact', 'regex', 'starts_with');--> statement-breakpoint
 CREATE TYPE "public"."moderation_action" AS ENUM('warn', 'delete', 'delete_and_warn', 'remove');--> statement-breakpoint
 CREATE TYPE "public"."moderation_kind" AS ENUM('anti_link', 'anti_flood', 'banned_words', 'anti_media', 'only_admins');--> statement-breakpoint
-CREATE TYPE "public"."target_status" AS ENUM('pending', 'sent', 'failed', 'skipped');--> statement-breakpoint
+CREATE TYPE "public"."target_status" AS ENUM('pending', 'sending', 'sent', 'failed', 'skipped');--> statement-breakpoint
 CREATE TABLE "audit_log" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid,
@@ -23,6 +23,7 @@ CREATE TABLE "broadcast_targets" (
 	"message_id" text,
 	"error" text,
 	"attempts" integer DEFAULT 0 NOT NULL,
+	"claimed_at" timestamp with time zone,
 	"sent_at" timestamp with time zone
 );
 --> statement-breakpoint
@@ -271,6 +272,7 @@ ALTER TABLE "welcome_configs" ADD CONSTRAINT "welcome_configs_group_id_groups_id
 CREATE INDEX "audit_log_created_idx" ON "audit_log" USING btree ("created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "broadcast_targets_uq" ON "broadcast_targets" USING btree ("broadcast_id","group_id");--> statement-breakpoint
 CREATE INDEX "broadcast_targets_pending_idx" ON "broadcast_targets" USING btree ("broadcast_id","status");--> statement-breakpoint
+CREATE INDEX "broadcast_targets_claimed_idx" ON "broadcast_targets" USING btree ("status","claimed_at");--> statement-breakpoint
 CREATE INDEX "broadcasts_status_scheduled_idx" ON "broadcasts" USING btree ("status","scheduled_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "contacts_jid_uq" ON "contacts" USING btree ("jid");--> statement-breakpoint
 CREATE UNIQUE INDEX "group_members_uq" ON "group_members" USING btree ("group_id","contact_id");--> statement-breakpoint
