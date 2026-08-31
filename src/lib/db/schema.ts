@@ -172,6 +172,25 @@ export const groupTags = pgTable(
   (t) => [primaryKey({ columns: [t.groupId, t.tagId] })],
 );
 
+/**
+ * Etiqueta aplicada ao contato — é o que transforma "quem falou sapato 44"
+ * numa lista de leads exportável.
+ */
+export const contactTags = pgTable(
+  "contact_tags",
+  {
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    source: text("source"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.contactId, t.tagId] })],
+);
+
 /* ------------------------------------------------------------------ *
  * Contatos e participantes
  * ------------------------------------------------------------------ */
