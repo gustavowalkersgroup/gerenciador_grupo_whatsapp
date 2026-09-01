@@ -1,0 +1,166 @@
+# Tudo numa máquina só, atrás de um Caddy que já existe no host.
+#
+# Diferença para o infra/docker-compose.yml (painel na Vercel + Evolution no
+# VPS): aqui o painel também é container, então a Evolution NÃO precisa de
+# porta pública — só o painel fala com ela, pela rede interna. E este arquivo
+# não sobe Caddy nenhum, para não brigar com o seu nas portas 80/443.
+#
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d --build
+#
+name: gerenciador-grupos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: evolution
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?defina APP_DB_PASSWORD no .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --save 60 1 --appendonly no
+    volumes:
+      - redis_data:/data
+
+  evolution:
+    image: atendai/evolution-api:v2.2.3
+    restart: always
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+    environment:
+      # Endereço interno: ninguém fora desta rede precisa alcançar a Evolution.
+      SERVER_URL: http://evolution:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${POSTGRES_PASSWORD}@postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      # A sessão do WhatsApp vive aqui. Perder isto = ler o QR de novo.
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      # O histórico fica no NOSSO banco. Guardar tudo aqui infla o disco à toa.
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      # O webhook é configurado por instância pelo painel, com o segredo no
+      # header. Global desligado evita mandar evento pro lugar errado.
+      WEBHOOK_GLOBAL_ENABLED: "false"
+
+      CONFIG_SESSION_PHONE_CLIENT: ${SESSION_CLIENT_NAME:-Gerenciador}
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "30"
+      DEL_INSTANCE: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-ERROR,WARN}
+      LOG_BAILEYS: error
+      TELEMETRY: "false"
+    volumes:
+      - evolution_instances:/evolution/instances
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Roda uma vez a cada `up`, aplica o que faltar e sai. O painel só sobe
+  # depois que este container terminar com sucesso.
+  migracoes:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGUSER: gerenciador
+      PGPASSWORD: ${APP_DB_PASSWORD}
+      PGDATABASE: gerenciador
+    volumes:
+      - ../../drizzle:/migracoes:ro
+      - ./migrate.sh:/migrate.sh:ro
+    entrypoint: ["/bin/sh", "/migrate.sh"]
+
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: gerenciador-grupos-painel
+    restart: always
+    depends_on:
+      migracoes: { condition: service_completed_successfully }
+      evolution: { condition: service_started }
+    environment:
+      DATABASE_URL: postgresql://gerenciador:${APP_DB_PASSWORD}@postgres:5432/gerenciador
+      EVOLUTION_API_URL: http://evolution:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?defina WEBHOOK_SECRET no .env}
+      CRON_SECRET: ${CRON_SECRET:?defina CRON_SECRET no .env}
+      AUTH_SECRET: ${AUTH_SECRET:?defina AUTH_SECRET no .env}
+      # Endereço que a Evolution vai usar para chamar o webhook. É o nome do
+      # container de propósito: não depende de DNS externo, não passa pelo
+      # Caddy e continua funcionando se o domínio mudar.
+      APP_URL: http://app:3000
+      TZ_DEFAULT: ${TZ_DEFAULT:-America/Sao_Paulo}
+      TZ: ${TZ_DEFAULT:-America/Sao_Paulo}
+      # Deixe vazio para manter o cookie de sessão restrito a HTTPS. Só ponha
+      # "false" se for acessar o painel por HTTP puro — ver README.
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+    networks:
+      default:
+        # Nome pelo qual o Caddy alcança o painel. Menos genérico que "app",
+        # que colidiria se o Caddy estiver em outras redes com um serviço homônimo.
+        aliases: [painel-grupos]
+    # Sem `ports:` de propósito. Com o Caddy em container ligado a esta rede,
+    # publicar porta no host só aumentaria a superfície exposta sem necessidade.
+    # Se o seu Caddy roda nativo na máquina, suba junto com o override:
+    #   docker compose -f docker-compose.yml -f docker-compose.porta-publicada.yml up -d
+
+  cron:
+    image: alpine:3.20
+    restart: always
+    depends_on:
+      app: { condition: service_started }
+    environment:
+      APP_URL: http://app:3000
+      CRON_SECRET: ${CRON_SECRET}
+      TZ: ${TZ_DEFAULT:-America/Sao_Paulo}
+    volumes:
+      - ./cron.sh:/cron.sh:ro
+    entrypoint: ["/bin/sh", "/cron.sh"]
+
+# Nome fixo em vez do "<projeto>_default" que o compose geraria: é este nome
+# que o docker-compose do Caddy declara como rede externa.
+networks:
+  default:
+    name: gerenciador-grupos
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:

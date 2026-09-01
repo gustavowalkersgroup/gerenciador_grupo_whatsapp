@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { deveMarcarSecure } from "@/lib/auth/cookie";
 import { db } from "@/lib/db";
+import { env } from "@/lib/env";
 import { sessions, users } from "@/lib/db/schema";
 
 export const SESSION_COOKIE = "ggw_session";
@@ -30,7 +32,7 @@ export async function createSession(userId: string): Promise<void> {
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: deveMarcarSecure(env().COOKIE_SECURE, process.env.NODE_ENV),
     path: "/",
     expires: expiresAt,
   });
