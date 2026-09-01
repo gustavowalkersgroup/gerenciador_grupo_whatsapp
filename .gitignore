@@ -35,6 +35,7 @@ yarn-error.log*
 # ...menos os exemplos: o README manda copiá-los, então precisam existir no repo
 !.env.example
 !infra/.env.example
+!infra/self-hosted/.env.example
 
 # vercel
 .vercel

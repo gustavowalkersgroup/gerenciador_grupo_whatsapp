@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.github
+.env*
+*.log
+tests
+drizzle/meta
+README.md
