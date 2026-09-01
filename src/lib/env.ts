@@ -21,6 +21,14 @@ const schema = z.object({
   AUTH_SECRET: z.string().min(16, "AUTH_SECRET precisa de pelo menos 16 caracteres"),
 
   APP_URL: z.string().url().optional(),
+
+  // "false" libera o login em HTTP puro (servidor local acessado por IP).
+  // Ausente = ligado em produção. Ver src/lib/auth/cookie.ts.
+  //
+  // A string vazia é aceita de propósito: o compose repassa a variável como
+  // `${COOKIE_SECURE:-}`, que vira "" quando ninguém definiu. Sem isto o app
+  // não subiria na configuração padrão.
+  COOKIE_SECURE: z.enum(["true", "false", ""]).optional(),
   TZ_DEFAULT: z.string().default("America/Sao_Paulo"),
 });
 

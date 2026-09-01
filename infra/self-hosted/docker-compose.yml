@@ -128,6 +128,9 @@ services:
       APP_URL: http://app:3000
       TZ_DEFAULT: ${TZ_DEFAULT:-America/Sao_Paulo}
       TZ: ${TZ_DEFAULT:-America/Sao_Paulo}
+      # Deixe vazio para manter o cookie de sessão restrito a HTTPS. Só ponha
+      # "false" se for acessar o painel por HTTP puro — ver README.
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
     networks:
       default:
         # Nome pelo qual o Caddy alcança o painel. Menos genérico que "app",

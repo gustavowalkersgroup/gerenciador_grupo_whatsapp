@@ -67,13 +67,12 @@ registra o que já aplicou, então `up` de novo é seguro.
 
 ## 4. Apontar o seu Caddy
 
-### Caddy em container (recomendado)
+Substitua `10.0.0.254` pelo IP do servidor (ou pelo domínio, se houver).
 
-O painel não publica porta nenhuma no host: o Caddy entra na rede do compose e
-fala com o container direto. Nada fica exposto na rede local, e só o Caddy
-alcança o painel.
+### Ligar o Caddy à rede do compose
 
-No `docker-compose.yml` do **seu Caddy**:
+O painel não publica porta no host: o Caddy entra na rede do compose e fala com
+o container direto. No `docker-compose.yml` do **seu Caddy**:
 
 ```yaml
 services:
@@ -86,7 +85,65 @@ networks:
     name: gerenciador-grupos
 ```
 
-No seu `Caddyfile`:
+`painel-grupos` (usado abaixo) é um alias de rede definido no nosso compose.
+Usamos ele em vez de `app` porque o Caddy costuma estar ligado a várias redes,
+e um serviço chamado `app` em outra delas causaria ambiguidade.
+
+A rede `gerenciador-grupos` só existe depois que este compose sobe. Suba ele
+primeiro, senão o `external: true` do Caddy falha.
+
+### Sem domínio, acessando por IP: escolha um dos dois
+
+**Opção A — HTTPS com a CA interna do Caddy.** Continua sendo TLS de verdade,
+sem domínio e sem Let's Encrypt.
+
+```caddyfile
+https://10.0.0.254 {
+	tls internal
+	encode gzip
+	reverse_proxy painel-grupos:3000
+}
+```
+
+O Caddy emite um certificado para o IP com uma autoridade própria. O navegador
+vai avisar que não confia nela até você instalar a raiz nas máquinas que vão
+usar o painel. Para exportá-la:
+
+```sh
+docker exec <caddy> cat /data/caddy/pki/authorities/local/root.crt > caddy-root.crt
+```
+
+Instale esse arquivo como autoridade confiável em cada máquina. Dá um trabalho
+inicial e resolve de vez: cadeado válido, sem aviso, sem mexer no cookie.
+
+**Opção B — HTTP puro.** Mais rápido de subir, com um custo real.
+
+```caddyfile
+http://10.0.0.254 {
+	encode gzip
+	reverse_proxy painel-grupos:3000
+}
+```
+
+O `http://` na frente é obrigatório: sem ele o Caddy tenta emitir certificado e
+redirecionar para HTTPS.
+
+Nesse caso é **obrigatório** pôr no `.env`:
+
+```
+COOKIE_SECURE=false
+```
+
+Sem isso o login falha de um jeito traiçoeiro — a sessão é criada no banco, mas
+o navegador descarta o cookie por ele vir marcado como `Secure` numa origem
+HTTP, e você volta para a tela de entrada como se a senha estivesse errada.
+
+O preço de desligar: **o cookie de sessão trafega em texto claro na rede
+local.** Quem capturar o tráfego assume a sessão de quem estiver logado. Numa
+rede cabeada de escritório, com máquinas conhecidas, é um risco que muita gente
+aceita. Em Wi-Fi compartilhado, não aceite — use a opção A.
+
+### Com domínio
 
 ```caddyfile
 painel.seudominio.com.br {
@@ -95,50 +152,41 @@ painel.seudominio.com.br {
 }
 ```
 
-`painel-grupos` é um alias de rede definido no compose. Usamos ele em vez de
-`app` porque o Caddy costuma estar ligado a várias redes, e um serviço chamado
-`app` em outra delas causaria ambiguidade.
+Nada a configurar: certificado automático e `COOKIE_SECURE` fica como está.
 
-Depois:
+### Recarregar
 
 ```sh
 docker compose up -d          # no diretório do seu Caddy, para entrar na rede
 docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile
 ```
 
-Se o Caddy subiu antes deste compose, a rede `gerenciador-grupos` ainda não
-existia e o `external: true` falha. Suba este compose primeiro.
+### Caddy nativo, não em container
 
-### Caddy nativo na máquina
-
-Caddy nativo não enxerga a rede do Docker, então aí sim é preciso publicar uma
-porta. Preencha `PORTA_PAINEL` no `.env` e suba com o override:
+Caddy nativo não enxerga a rede do Docker. Preencha `PORTA_PAINEL` no `.env`,
+suba com o override e aponte para o loopback:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.porta-publicada.yml up -d
 ```
 
 ```caddyfile
-painel.seudominio.com.br {
-	encode gzip
+http://10.0.0.254 {
 	reverse_proxy 127.0.0.1:3000   # a sua PORTA_PAINEL
 }
 ```
 
 ## 5. Primeiro acesso
 
-Abra `https://painel.seudominio.com.br` e crie o usuário.
+Abra o endereço que você configurou e crie o usuário.
 
-**Duas coisas que mordem aqui:**
+**A tela de criar o primeiro usuário fica aberta enquanto não existir nenhum.**
+Quem chegar primeiro vira dono. Crie o seu no minuto seguinte a subir, antes de
+divulgar o endereço — ainda mais em rede local, onde qualquer máquina do
+escritório alcança o painel.
 
-1. **Tem que ser HTTPS.** O cookie de sessão sai com a flag `Secure` em
-   produção. Se você abrir por `http://10.0.0.254:3000` direto, o login vai
-   parecer que funcionou e te jogar de volta na tela de entrada, porque o
-   navegador se recusa a guardar o cookie. Não é bug — é o cookie fazendo o
-   trabalho dele. Acesse pelo domínio, via Caddy.
-2. **A tela de criar o primeiro usuário fica aberta enquanto não existir
-   nenhum.** Quem chegar primeiro vira dono. Crie o seu no minuto seguinte a
-   subir, antes de divulgar o endereço.
+Se o login parecer não funcionar (você entra e volta para a tela de entrada),
+é o cookie: reveja a seção anterior.
 
 Depois: cadastre o número em **Números**, leia o QR, e o painel configura o
 webhook da instância sozinho.
