@@ -11,42 +11,37 @@ aquele sobe um Caddy próprio nas portas 80 e 443, e brigaria com o seu.
 
 | Container   | O que faz                                    | Porta publicada |
 |-------------|----------------------------------------------|-----------------|
-| `app`       | Painel, API, webhook                         | **uma só**, a sua escolha |
+| `app`       | Painel, API, webhook                         | nenhuma* |
 | `evolution` | Sessão do WhatsApp (Baileys)                 | nenhuma |
 | `postgres`  | Dois bancos: `gerenciador` e `evolution`     | nenhuma |
 | `redis`     | Cache da Evolution                           | nenhuma |
 | `migracoes` | Aplica o schema e sai                        | nenhuma |
 | `cron`      | Dispara a fila, checa saúde, faz a retenção  | nenhuma |
 
-Só o painel publica porta. A Evolution fica exclusivamente na rede interna do
-Docker — no desenho da Vercel ela precisava ser alcançável de fora porque o
-painel era remoto; aqui os dois são vizinhos, então não há motivo para expor
-ao WhatsApp-manager mais superfície do que o necessário.
+\* Nenhum container publica porta no host. O Caddy entra na rede do compose e
+alcança o painel pelo nome. A exceção é quem tem o Caddy nativo na máquina, que
+precisa de uma porta publicada — passo 4.
 
-## 1. Achar uma porta livre
+A Evolution não é exposta nem nesse caso. No desenho da Vercel ela precisava
+ser alcançável de fora porque o painel era remoto; aqui os dois são vizinhos na
+rede interna, então não há motivo para dar ao mundo mais superfície do que o
+necessário.
+
+## 1. Precisa de porta livre?
+
+**Caddy em container: não.** O painel não publica porta nenhuma; o Caddy entra
+na rede do compose. Pule para o passo 2.
+
+**Caddy nativo:** aí sim, escolha uma porta livre:
 
 ```sh
-# O que já está escutando na máquina
-ss -lntp
-
-# Primeira porta livre a partir da 3000
+ss -lntp                                   # o que já está escutando
 for p in $(seq 3000 3100); do
   ss -lnt "sport = :$p" | grep -q LISTEN || { echo "livre: $p"; break; }
 done
 ```
 
-E confirme o que o seu Caddy já serve, para escolher o nome do site sem
-colidir:
-
-```sh
-# Caddy nativo
-sudo caddy adapt --config /etc/caddy/Caddyfile --pretty | head -40
-# Caddy em container
-docker ps --filter publish=443
-docker exec -it <container-do-caddy> cat /etc/caddy/Caddyfile
-```
-
-Anote a porta livre: ela vai em `PORTA_PAINEL` no `.env`.
+Anote: vai em `PORTA_PAINEL` no `.env`, junto com o override do passo 4.
 
 ## 2. Configurar
 
@@ -72,40 +67,63 @@ registra o que já aplicou, então `up` de novo é seguro.
 
 ## 4. Apontar o seu Caddy
 
-**Caddy nativo na máquina** — acrescente ao seu `Caddyfile`:
+### Caddy em container (recomendado)
 
-```caddyfile
-painel.seudominio.com.br {
-	encode gzip
-	reverse_proxy 127.0.0.1:3000   # troque pela sua PORTA_PAINEL
-}
-```
+O painel não publica porta nenhuma no host: o Caddy entra na rede do compose e
+fala com o container direto. Nada fica exposto na rede local, e só o Caddy
+alcança o painel.
 
-**Caddy em container** — ele não enxerga o `127.0.0.1` do host. Em vez de abrir
-a porta para a rede toda, ligue o Caddy à rede deste compose. No
-`docker-compose.yml` do seu Caddy:
+No `docker-compose.yml` do **seu Caddy**:
 
 ```yaml
 services:
   caddy:
     networks: [default, gerenciador]
+
 networks:
   gerenciador:
     external: true
-    name: gerenciador-grupos_default
+    name: gerenciador-grupos
 ```
 
-e no `Caddyfile` use o nome do container, sem porta publicada nenhuma:
+No seu `Caddyfile`:
 
 ```caddyfile
 painel.seudominio.com.br {
 	encode gzip
-	reverse_proxy app:3000
+	reverse_proxy painel-grupos:3000
 }
 ```
 
-Depois: `caddy reload --config /etc/caddy/Caddyfile` (ou
-`docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile`).
+`painel-grupos` é um alias de rede definido no compose. Usamos ele em vez de
+`app` porque o Caddy costuma estar ligado a várias redes, e um serviço chamado
+`app` em outra delas causaria ambiguidade.
+
+Depois:
+
+```sh
+docker compose up -d          # no diretório do seu Caddy, para entrar na rede
+docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile
+```
+
+Se o Caddy subiu antes deste compose, a rede `gerenciador-grupos` ainda não
+existia e o `external: true` falha. Suba este compose primeiro.
+
+### Caddy nativo na máquina
+
+Caddy nativo não enxerga a rede do Docker, então aí sim é preciso publicar uma
+porta. Preencha `PORTA_PAINEL` no `.env` e suba com o override:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.porta-publicada.yml up -d
+```
+
+```caddyfile
+painel.seudominio.com.br {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000   # a sua PORTA_PAINEL
+}
+```
 
 ## 5. Primeiro acesso
 

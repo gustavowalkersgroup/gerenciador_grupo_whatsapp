@@ -128,10 +128,15 @@ services:
       APP_URL: http://app:3000
       TZ_DEFAULT: ${TZ_DEFAULT:-America/Sao_Paulo}
       TZ: ${TZ_DEFAULT:-America/Sao_Paulo}
-    ports:
-      # Só o painel publica porta, e por padrão apenas no loopback: quem entra
-      # de fora é o Caddy. Se o seu Caddy for container, veja o README.
-      - "${BIND_PAINEL:-127.0.0.1}:${PORTA_PAINEL:?defina PORTA_PAINEL no .env}:3000"
+    networks:
+      default:
+        # Nome pelo qual o Caddy alcança o painel. Menos genérico que "app",
+        # que colidiria se o Caddy estiver em outras redes com um serviço homônimo.
+        aliases: [painel-grupos]
+    # Sem `ports:` de propósito. Com o Caddy em container ligado a esta rede,
+    # publicar porta no host só aumentaria a superfície exposta sem necessidade.
+    # Se o seu Caddy roda nativo na máquina, suba junto com o override:
+    #   docker compose -f docker-compose.yml -f docker-compose.porta-publicada.yml up -d
 
   cron:
     image: alpine:3.20
@@ -145,6 +150,12 @@ services:
     volumes:
       - ./cron.sh:/cron.sh:ro
     entrypoint: ["/bin/sh", "/cron.sh"]
+
+# Nome fixo em vez do "<projeto>_default" que o compose geraria: é este nome
+# que o docker-compose do Caddy declara como rede externa.
+networks:
+  default:
+    name: gerenciador-grupos
 
 volumes:
   postgres_data:

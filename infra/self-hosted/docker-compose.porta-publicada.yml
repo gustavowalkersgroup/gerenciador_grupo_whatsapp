@@ -1,0 +1,14 @@
+# Override para quem tem o Caddy NATIVO na máquina (não em container).
+#
+# Caddy nativo não enxerga a rede interna do Docker, então o painel precisa
+# publicar uma porta no host. Por padrão só no loopback: a porta fica
+# alcançável pelo próprio servidor, não pela rede local.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.porta-publicada.yml up -d
+#
+# Com o Caddy em container, NÃO use este arquivo — ligue o Caddy à rede
+# `gerenciador-grupos` e fale com o painel pelo nome, sem porta publicada.
+services:
+  app:
+    ports:
+      - "${BIND_PAINEL:-127.0.0.1}:${PORTA_PAINEL:-3000}:3000"
